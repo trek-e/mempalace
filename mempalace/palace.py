@@ -1103,18 +1103,11 @@ def bulk_check_mined(collection) -> dict[str, float]:
     """
     mined: dict[str, float] = {}
     try:
-        total = collection.count()
-        offset = 0
-        while offset < total:
-            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
-            for meta in batch["metadatas"]:
-                src = meta.get("source_file")
-                mtime = meta.get("source_mtime")
-                if src and mtime is not None:
-                    mined[src] = float(mtime)
-            if not batch["ids"]:
-                break
-            offset += len(batch["ids"])
+        for _did, _doc, meta in collection.scan():
+            src = meta.get("source_file")
+            mtime = meta.get("source_mtime")
+            if src and mtime is not None:
+                mined[src] = float(mtime)
     except Exception:
         logger.warning("bulk_check_mined: partial fetch, %d files loaded", len(mined))
     return mined
@@ -1138,24 +1131,17 @@ def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[st
     """
     mined: set[str] = set()
     try:
-        total = collection.count()
-        offset = 0
-        while offset < total:
-            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
-            for meta in batch["metadatas"]:
-                meta = meta or {}
-                src = meta.get("source_file")
-                if not src:
-                    continue
-                if not _metadata_matches_extract_mode(meta, extract_mode):
-                    continue
-                # Same default as file_already_mined: missing version == 1
-                version = meta.get("normalize_version", 1)
-                if version >= NORMALIZE_VERSION:
-                    mined.add(src)
-            if not batch["ids"]:
-                break
-            offset += len(batch["ids"])
+        for _did, _doc, meta in collection.scan():
+            meta = meta or {}
+            src = meta.get("source_file")
+            if not src:
+                continue
+            if not _metadata_matches_extract_mode(meta, extract_mode):
+                continue
+            # Same default as file_already_mined: missing version == 1
+            version = meta.get("normalize_version", 1)
+            if version >= NORMALIZE_VERSION:
+                mined.add(src)
     except Exception:
         logger.warning("prefetch_mined_set: partial fetch, %d files loaded", len(mined))
     return mined

@@ -155,6 +155,9 @@ class EmbeddingCollection(BaseCollection):
     def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dict] = None):
         return self._inner.lexical_search(query=query, n_results=n_results, where=where)
 
+    def scan(self, *, where=None, include=("metadatas",), limit=None):
+        return self._inner.scan(where=where, include=include, limit=limit)
+
     def update(self, *, ids, documents=None, metadatas=None, embeddings=None):
         ids = _as_list(ids)
         if documents is not None:

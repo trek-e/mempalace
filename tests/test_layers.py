@@ -71,13 +71,11 @@ def test_layer0_default_path():
 
 
 def _mock_chromadb_for_layer(docs, metas, monkeypatch=None):
-    """Return a mock collection whose get() returns docs/metas."""
+    """Return a mock collection whose scan() yields (id, doc, meta) tuples."""
     mock_col = MagicMock()
-    # First batch returns data, second batch returns empty (end of pagination)
-    mock_col.get.side_effect = [
-        {"documents": docs, "metadatas": metas},
-        {"documents": [], "metadatas": []},
-    ]
+    mock_col.scan.return_value = iter(
+        [(f"id{i}", doc or "", meta or {}) for i, (doc, meta) in enumerate(zip(docs, metas))]
+    )
     return mock_col
 
 
@@ -115,7 +113,7 @@ def test_layer1_generates_essential_story():
 
 def test_layer1_empty_palace():
     mock_col = MagicMock()
-    mock_col.get.return_value = {"documents": [], "metadatas": []}
+    mock_col.scan.return_value = iter([])
     with (
         patch("mempalace.layers.MempalaceConfig") as mock_cfg,
         patch("mempalace.layers._get_collection", return_value=mock_col),
@@ -141,8 +139,8 @@ def test_layer1_with_wing_filter():
         result = layer.generate()
 
     assert "ESSENTIAL STORY" in result
-    # Verify wing filter was passed
-    call_kwargs = mock_col.get.call_args_list[0][1]
+    # Verify wing filter was passed to scan()
+    call_kwargs = mock_col.scan.call_args[1]
     assert call_kwargs.get("where") == {"wing": "project_x"}
 
 
@@ -202,12 +200,13 @@ def test_layer1_importance_from_various_keys():
 
 
 def test_layer1_batch_exception_breaks():
-    """If col.get raises on a batch, loop breaks gracefully."""
+    """If col.scan raises, the exception is caught and generate() returns gracefully."""
+
+    def _raising_scan(**kwargs):
+        raise RuntimeError("scan error")
+
     mock_col = MagicMock()
-    mock_col.get.side_effect = [
-        {"documents": ["doc1"], "metadatas": [{"room": "r"}]},
-        RuntimeError("batch error"),
-    ]
+    mock_col.scan.side_effect = _raising_scan
     with (
         patch("mempalace.layers.MempalaceConfig") as mock_cfg,
         patch("mempalace.layers._get_collection", return_value=mock_col),
@@ -216,7 +215,7 @@ def test_layer1_batch_exception_breaks():
         layer = Layer1(palace_path="/fake")
         result = layer.generate()
 
-    assert "ESSENTIAL STORY" in result
+    assert "No memories" in result
 
 
 # ── Layer2 — mocked chromadb ────────────────────────────────────────────

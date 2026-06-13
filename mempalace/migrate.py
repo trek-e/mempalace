@@ -438,17 +438,8 @@ def plan_wing_renames(items):
 
 def _iter_collection_items(col, batch_size=1000):
     """Yield ``(id, metadata)`` for every record in a backend collection."""
-    total = col.count()
-    offset = 0
-    while offset < total:
-        batch = col.get(limit=batch_size, offset=offset, include=["metadatas"])
-        ids = batch.ids if hasattr(batch, "ids") else batch["ids"]
-        metas = batch.metadatas if hasattr(batch, "metadatas") else batch["metadatas"]
-        if not ids:
-            break
-        for rec_id, meta in zip(ids, metas):
-            yield rec_id, meta
-        offset += len(ids)
+    for rec_id, _doc, meta in col.scan():
+        yield rec_id, meta
 
 
 def _apply_wing_updates(col, updates, batch_size=500):

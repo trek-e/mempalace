@@ -101,27 +101,16 @@ class Layer1:
         except Exception:
             return "## L1 — No palace found. Run: mempalace mine <dir>"
 
-        # Fetch all drawers in batches to avoid SQLite variable limit (~999)
-        _BATCH = 500
         docs, metas = [], []
-        offset = 0
-        while True:
-            kwargs = {"include": ["documents", "metadatas"], "limit": _BATCH, "offset": offset}
-            if self.wing:
-                kwargs["where"] = {"wing": self.wing}
-            try:
-                batch = col.get(**kwargs)
-            except Exception:
-                break
-            batch_docs = batch.get("documents", [])
-            batch_metas = batch.get("metadatas", [])
-            if not batch_docs:
-                break
-            docs.extend(batch_docs)
-            metas.extend(batch_metas)
-            offset += len(batch_docs)
-            if len(batch_docs) < _BATCH or len(docs) >= self.MAX_SCAN:
-                break
+        where = {"wing": self.wing} if self.wing else None
+        try:
+            for _did, doc, meta in col.scan(
+                where=where, include=["documents", "metadatas"], limit=self.MAX_SCAN
+            ):
+                docs.append(doc)
+                metas.append(meta)
+        except Exception:
+            pass
 
         if not docs:
             return "## L1 — No memories yet."

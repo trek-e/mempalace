@@ -56,25 +56,13 @@ def get_source_groups(col, min_count=MIN_DRAWERS_TO_CHECK, source_pattern=None, 
     If wing is specified, only considers drawers in that wing. This catches
     cross-wing duplicates when the same source was mined into multiple wings.
     """
-    total = col.count()
     groups = defaultdict(list)
-
-    offset = 0
-    batch_size = 1000
-    while offset < total:
-        kwargs = {"limit": batch_size, "offset": offset, "include": ["metadatas"]}
-        if wing:
-            kwargs["where"] = {"wing": wing}
-        batch = col.get(**kwargs)
-        if not batch["ids"]:
-            break
-        for did, meta in zip(batch["ids"], batch["metadatas"]):
-            src = meta.get("source_file", "unknown")
-            if source_pattern and source_pattern.lower() not in src.lower():
-                continue
-            groups[src].append(did)
-        offset += len(batch["ids"])
-
+    where = {"wing": wing} if wing else None
+    for did, _doc, meta in col.scan(where=where):
+        src = (meta or {}).get("source_file", "unknown")
+        if source_pattern and source_pattern.lower() not in src.lower():
+            continue
+        groups[src].append(did)
     return {src: ids for src, ids in groups.items() if len(ids) >= min_count}
 
 

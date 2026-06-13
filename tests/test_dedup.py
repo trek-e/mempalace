@@ -11,20 +11,15 @@ from mempalace import dedup
 
 def test_get_source_groups_basic():
     col = MagicMock()
-    col.count.return_value = 5
-    col.get.side_effect = [
-        {
-            "ids": ["d1", "d2", "d3", "d4", "d5"],
-            "metadatas": [
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-            ],
-        },
-        {"ids": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("d1", "", {"source_file": "a.txt"}),
+            ("d2", "", {"source_file": "a.txt"}),
+            ("d3", "", {"source_file": "a.txt"}),
+            ("d4", "", {"source_file": "a.txt"}),
+            ("d5", "", {"source_file": "a.txt"}),
+        ]
+    )
     groups = dedup.get_source_groups(col, min_count=5)
     assert "a.txt" in groups
     assert len(groups["a.txt"]) == 5
@@ -32,38 +27,28 @@ def test_get_source_groups_basic():
 
 def test_get_source_groups_below_min():
     col = MagicMock()
-    col.count.return_value = 2
-    col.get.side_effect = [
-        {
-            "ids": ["d1", "d2"],
-            "metadatas": [
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-            ],
-        },
-        {"ids": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("d1", "", {"source_file": "a.txt"}),
+            ("d2", "", {"source_file": "a.txt"}),
+        ]
+    )
     groups = dedup.get_source_groups(col, min_count=5)
     assert len(groups) == 0
 
 
 def test_get_source_groups_source_filter():
     col = MagicMock()
-    col.count.return_value = 6
-    col.get.side_effect = [
-        {
-            "ids": ["d1", "d2", "d3", "d4", "d5", "d6"],
-            "metadatas": [
-                {"source_file": "project_a.txt"},
-                {"source_file": "project_a.txt"},
-                {"source_file": "project_a.txt"},
-                {"source_file": "project_a.txt"},
-                {"source_file": "project_a.txt"},
-                {"source_file": "other.txt"},
-            ],
-        },
-        {"ids": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("d1", "", {"source_file": "project_a.txt"}),
+            ("d2", "", {"source_file": "project_a.txt"}),
+            ("d3", "", {"source_file": "project_a.txt"}),
+            ("d4", "", {"source_file": "project_a.txt"}),
+            ("d5", "", {"source_file": "project_a.txt"}),
+            ("d6", "", {"source_file": "other.txt"}),
+        ]
+    )
     groups = dedup.get_source_groups(col, min_count=5, source_pattern="project_a")
     assert "project_a.txt" in groups
     assert "other.txt" not in groups
@@ -71,36 +56,31 @@ def test_get_source_groups_source_filter():
 
 def test_get_source_groups_wing_filter():
     col = MagicMock()
-    col.count.return_value = 5
-    col.get.side_effect = [
-        {
-            "ids": ["d1", "d2", "d3", "d4", "d5"],
-            "metadatas": [
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-                {"source_file": "a.txt"},
-            ],
-        },
-        {"ids": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("d1", "", {"source_file": "a.txt"}),
+            ("d2", "", {"source_file": "a.txt"}),
+            ("d3", "", {"source_file": "a.txt"}),
+            ("d4", "", {"source_file": "a.txt"}),
+            ("d5", "", {"source_file": "a.txt"}),
+        ]
+    )
     dedup.get_source_groups(col, min_count=5, wing="my_wing")
-    # Verify where filter was passed
-    first_call = col.get.call_args_list[0]
-    assert first_call.kwargs.get("where") == {"wing": "my_wing"}
+    # Verify where filter was passed to scan()
+    col.scan.assert_called_once_with(where={"wing": "my_wing"})
 
 
 def test_get_source_groups_missing_source_file():
     col = MagicMock()
-    col.count.return_value = 5
-    col.get.side_effect = [
-        {
-            "ids": ["d1", "d2", "d3", "d4", "d5"],
-            "metadatas": [{}, {}, {}, {}, {}],
-        },
-        {"ids": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("d1", "", {}),
+            ("d2", "", {}),
+            ("d3", "", {}),
+            ("d4", "", {}),
+            ("d5", "", {}),
+        ]
+    )
     groups = dedup.get_source_groups(col, min_count=5)
     assert "unknown" in groups
 
