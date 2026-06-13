@@ -131,28 +131,13 @@ def _paginate_ids(col, where=None):
 
 
 def _extract_drawers(col, total: int, batch_size: int):
-    all_ids = []
-    all_docs = []
-    all_metas = []
-    offset = 0
-    while offset < total:
-        batch = col.get(limit=batch_size, offset=offset, include=["documents", "metadatas"])
-        if not batch["ids"]:
-            break
-        all_ids.extend(batch["ids"])
-        all_docs.extend(batch["documents"])
-        # chromadb 1.5.x's upsert validates that every metadatas[i] is a
-        # non-empty dict (chromadb/api/types.py:validate_metadata). Drawers
-        # extracted from sqlite ground truth can come back with None or {}
-        # for sparse historical writes — coerce those to a sentinel so the
-        # rebuild upsert can complete instead of raising ValueError ~80%
-        # through a multi-hour run. See #1458 for full context.
-        sanitized_metas = [
-            m if (isinstance(m, dict) and len(m) > 0) else {"_repaired_empty_meta": True}
-            for m in batch["metadatas"]
-        ]
-        all_metas.extend(sanitized_metas)
-        offset += len(batch["ids"])
+    all_ids, all_docs, all_metas = [], [], []
+    for did, doc, meta in col.scan(include=["documents", "metadatas"]):
+        all_ids.append(did)
+        all_docs.append(doc)
+        all_metas.append(
+            meta if (isinstance(meta, dict) and len(meta) > 0) else {"_repaired_empty_meta": True}
+        )
     return all_ids, all_docs, all_metas
 
 

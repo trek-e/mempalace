@@ -82,11 +82,12 @@ def test_paginate_ids_offset_exception_fallback():
 def test_extract_drawers_preserves_valid_metadata():
     """Non-empty dict metadata passes through unchanged."""
     col = MagicMock()
-    col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a", "room": "1"}, {"wing": "b", "room": "2"}],
-    }
+    col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a", "room": "1"}),
+            ("id2", "doc2", {"wing": "b", "room": "2"}),
+        ]
+    )
     all_ids, all_docs, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
     assert all_ids == ["id1", "id2"]
     assert all_docs == ["doc1", "doc2"]
@@ -101,11 +102,14 @@ def test_extract_drawers_sanitizes_none_metadata():
     None entry; the sanitizer keeps the rebuild upsert from crashing.
     """
     col = MagicMock()
-    col.get.return_value = {
-        "ids": ["id1", "id2", "id3"],
-        "documents": ["doc1", "doc2", "doc3"],
-        "metadatas": [{"wing": "a"}, None, {"wing": "c"}],
-    }
+    # scan() always returns dict (base class coerces), but test the sentinel for empty/None-like
+    col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {}),
+            ("id3", "doc3", {"wing": "c"}),
+        ]
+    )
     _, _, all_metas = repair._extract_drawers(col, total=3, batch_size=3)
     assert all_metas[0] == {"wing": "a"}
     assert all_metas[1] == {"_repaired_empty_meta": True}
@@ -119,11 +123,12 @@ def test_extract_drawers_sanitizes_empty_dict_metadata():
     in the previous code path mistakenly assumed otherwise.
     """
     col = MagicMock()
-    col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{}, {"wing": "b"}],
-    }
+    col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     _, _, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
     assert all_metas[0] == {"_repaired_empty_meta": True}
     assert all_metas[1] == {"wing": "b"}
@@ -137,11 +142,14 @@ def test_extract_drawers_sanitization_preserves_alignment():
     documents with metadata.
     """
     col = MagicMock()
-    col.get.return_value = {
-        "ids": ["id1", "id2", "id3", "id4"],
-        "documents": ["d1", "d2", "d3", "d4"],
-        "metadatas": [None, {"k": "v"}, {}, None],
-    }
+    col.scan.return_value = iter(
+        [
+            ("id1", "d1", {}),
+            ("id2", "d2", {"k": "v"}),
+            ("id3", "d3", {}),
+            ("id4", "d4", {}),
+        ]
+    )
     all_ids, all_docs, all_metas = repair._extract_drawers(col, total=4, batch_size=4)
     assert len(all_ids) == len(all_docs) == len(all_metas) == 4
     assert all_ids == ["id1", "id2", "id3", "id4"]
@@ -152,13 +160,15 @@ def test_extract_drawers_sanitization_preserves_alignment():
 
 
 def test_extract_drawers_multiple_batches():
-    """Pagination handles batch boundaries without losing/duplicating rows."""
+    """scan() streams all rows without pagination — still yields all rows correctly."""
     col = MagicMock()
-    col.get.side_effect = [
-        {"ids": ["id1", "id2"], "documents": ["d1", "d2"], "metadatas": [{"a": 1}, None]},
-        {"ids": ["id3"], "documents": ["d3"], "metadatas": [{}]},
-        {"ids": [], "documents": [], "metadatas": []},
-    ]
+    col.scan.return_value = iter(
+        [
+            ("id1", "d1", {"a": 1}),
+            ("id2", "d2", {}),
+            ("id3", "d3", {}),
+        ]
+    )
     all_ids, all_docs, all_metas = repair._extract_drawers(col, total=3, batch_size=2)
     assert all_ids == ["id1", "id2", "id3"]
     assert all_metas == [{"a": 1}, {"_repaired_empty_meta": True}, {"_repaired_empty_meta": True}]
@@ -323,11 +333,12 @@ def test_rebuild_index_success(mock_backend_cls, mock_shutil, tmp_path):
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
 
     mock_new_col = MagicMock()
     mock_new_col.count.return_value = 2
@@ -375,11 +386,12 @@ def test_rebuild_index_ignores_missing_temp_collection_at_start(
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
 
     mock_new_col = MagicMock()
     mock_new_col.count.return_value = 2
@@ -507,11 +519,12 @@ def test_rebuild_index_default_uses_configured_collection(mock_backend_cls, mock
     sqlite3.connect(str(sqlite_path)).close()
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 2
     mock_new_col = MagicMock()
@@ -698,14 +711,9 @@ def test_rebuild_index_proceeds_with_override(mock_backend_cls, mock_shutil, tmp
     mock_backend = MagicMock()
     mock_col = MagicMock()
     mock_col.count.return_value = 10_000
-    mock_col.get.side_effect = [
-        {
-            "ids": [f"id{i}" for i in range(10_000)],
-            "documents": ["x"] * 10_000,
-            "metadatas": [{}] * 10_000,
-        },
-        {"ids": [], "documents": [], "metadatas": []},
-    ]
+    mock_col.scan.return_value = iter(
+        [(f"id{i}", "x", {} if i > 0 else {"_repaired_empty_meta": True}) for i in range(10_000)]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 10_000
     mock_new_col = MagicMock()
@@ -768,11 +776,12 @@ def test_rebuild_index_live_failure_restores_backup(mock_backend_cls, mock_shuti
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 2
     mock_new_col = MagicMock()
@@ -814,11 +823,12 @@ def test_rebuild_index_live_delete_missing_still_restores_backup(
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 2
     mock_backend = _install_mock_backend(mock_backend_cls, mock_col)
@@ -861,11 +871,12 @@ def test_rebuild_index_restore_failure_preserves_original_error(
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 2
     mock_new_col = MagicMock()
@@ -934,11 +945,12 @@ def test_rebuild_index_ignores_temp_cleanup_failure_after_success(
 
     mock_col = MagicMock()
     mock_col.count.return_value = 2
-    mock_col.get.return_value = {
-        "ids": ["id1", "id2"],
-        "documents": ["doc1", "doc2"],
-        "metadatas": [{"wing": "a"}, {"wing": "b"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+            ("id2", "doc2", {"wing": "b"}),
+        ]
+    )
     mock_temp_col = MagicMock()
     mock_temp_col.count.return_value = 2
     mock_new_col = MagicMock()
@@ -1965,11 +1977,11 @@ def test_rebuild_index_calls_vacuum(mock_backend_cls, mock_shutil, tmp_path):
 
     mock_col = MagicMock()
     mock_col.count.return_value = 1
-    mock_col.get.return_value = {
-        "ids": ["id1"],
-        "documents": ["doc1"],
-        "metadatas": [{"wing": "a"}],
-    }
+    mock_col.scan.return_value = iter(
+        [
+            ("id1", "doc1", {"wing": "a"}),
+        ]
+    )
     mock_new_col = MagicMock()
     mock_new_col.count.return_value = 1
     mock_temp_col = MagicMock()

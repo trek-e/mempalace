@@ -15,7 +15,7 @@ conformance suite land in follow-up PRs.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import ClassVar, Optional, Protocol, runtime_checkable
+from typing import ClassVar, Iterable, Iterator, Optional, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +495,51 @@ class BaseCollection(ABC):
                 break
             offset += n
         return total
+
+    def scan(
+        self,
+        *,
+        where: Optional[dict] = None,
+        include: Iterable[str] = ("metadatas",),
+        limit: Optional[int] = None,
+    ) -> Iterator[tuple[str, str, dict]]:
+        """Yield ``(id, document, metadata)`` for every matching drawer in O(N).
+
+        The single linear traversal the rebuild / dedup / migrate / wake-up
+        paths share. ``include`` controls payload: ``"documents"`` materializes
+        the verbatim text (otherwise ``document`` is ``""``); metadata is always
+        returned. ``where`` filters rows; ``limit`` caps the number of drawers
+        yielded.
+
+        The default paginates :meth:`get` — correct, but still offset-bound;
+        backends SHOULD override with a single streaming cursor whose output is
+        identical to this scan (no offset re-skip, no vector-index load).
+        """
+        want_docs = "documents" in tuple(include)
+        get_include = ["documents", "metadatas"] if want_docs else ["metadatas"]
+        yielded = 0
+        offset = 0
+        page = 1000
+        while True:
+            take = page if limit is None else min(page, limit - yielded)
+            if take <= 0:
+                return
+            batch = self.get(where=where, limit=take, offset=offset, include=get_include)
+            ids = batch.ids
+            if not ids:
+                return
+            docs = batch.documents if want_docs else None
+            metas = batch.metadatas
+            for i, did in enumerate(ids):
+                doc = docs[i] if (docs and i < len(docs)) else ""
+                meta = metas[i] if i < len(metas) else {}
+                yield did, doc or "", meta or {}
+                yielded += 1
+                if limit is not None and yielded >= limit:
+                    return
+            if len(ids) < take:
+                return
+            offset += len(ids)
 
     def close(self) -> None:
         return None

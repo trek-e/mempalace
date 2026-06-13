@@ -997,6 +997,124 @@ def _sql_count_matching(db_path: str, collection_name: str, key: str, value: str
         conn.close()
 
 
+_SCAN_COMPLEX_WHERE = object()
+
+
+def _simple_eq_where(where):
+    """Reduce ``where`` to ``None`` (no filter), ``(key, value)`` for a single
+    scalar-equality filter the SQL scan can push down, or
+    ``_SCAN_COMPLEX_WHERE`` for anything richer (caller falls back to the base
+    scan)."""
+    if where is None:
+        return None
+    if isinstance(where, dict) and len(where) == 1:
+        ((key, value),) = where.items()
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            return key, value
+    return _SCAN_COMPLEX_WHERE
+
+
+def _sql_scan(conn, collection_name, *, eq=None, want_documents=False):
+    """Stream ``(embedding_id, document, metadata)`` for every drawer in
+    ``collection_name`` from an already-open read-only ``conn``.
+
+    One cursor over ``embeddings`` LEFT JOIN ``embedding_metadata`` ordered by
+    the embedding rowid, so each drawer's rows are contiguous and yielded with
+    O(1) accumulator memory — no offset re-skip, no HNSW load. ``eq`` pushes a
+    single ``(key, value)`` equality to SQL. ``chroma:document`` is excluded
+    from the join unless ``want_documents`` (then popped out as the document);
+    the LEFT JOIN still surfaces drawers that carry no other metadata.
+
+    SQLite errors during streaming PROPAGATE — a rebuild must fail loud, never
+    silently truncate. Closes ``conn`` when iteration ends or the generator is
+    closed.
+    """
+    try:
+        if (
+            conn.execute("SELECT 1 FROM collections WHERE name = ?", (collection_name,)).fetchone()
+            is None
+        ):
+            return
+
+        params = [collection_name]
+        eq_sql = ""
+        if eq is not None:
+            key, value = eq
+            eq_sql = """
+                AND e.id IN (
+                    SELECT mf.id FROM embedding_metadata mf
+                    WHERE mf.key = ?
+                      AND COALESCE(mf.string_value, CAST(mf.int_value AS TEXT),
+                                   CAST(mf.float_value AS TEXT),
+                                   CAST(mf.bool_value AS TEXT)) = ?
+                )
+            """
+            params.extend([key, str(value)])
+
+        doc_join = "" if want_documents else "AND em.key != 'chroma:document'"
+        cur = conn.execute(
+            f"""
+            SELECT e.id, e.embedding_id, em.key,
+                   em.string_value, em.int_value, em.float_value, em.bool_value
+            FROM embeddings e
+            JOIN segments s ON e.segment_id = s.id AND s.scope = 'METADATA'
+            JOIN collections c ON s.collection = c.id
+            LEFT JOIN embedding_metadata em ON em.id = e.id {doc_join}
+            WHERE c.name = ?
+            {eq_sql}
+            ORDER BY e.id
+            """,
+            params,
+        )
+
+        cur_rowid = None
+        cur_emb = None
+        cur_doc = ""
+        cur_meta: dict = {}
+        have = False
+        for rowid, emb_id, key, sv, iv, fv, bv in cur:
+            if rowid != cur_rowid:
+                if have:
+                    yield cur_emb, cur_doc, cur_meta
+                cur_rowid = rowid
+                cur_emb = emb_id
+                cur_doc = ""
+                cur_meta = {}
+                have = True
+            if key is None:
+                continue
+            if sv is not None:
+                value = sv
+            elif iv is not None:
+                value = iv
+            elif fv is not None:
+                value = fv
+            elif bv is not None:
+                value = bool(bv)
+            else:
+                continue
+            if key == "chroma:document":
+                cur_doc = str(value or "")
+            else:
+                cur_meta[key] = value
+        if have:
+            yield cur_emb, cur_doc, cur_meta
+    finally:
+        conn.close()
+
+
+def _scan_limited(it, limit):
+    """Yield at most ``limit`` items from ``it``, then close ``it`` so the
+    underlying generator's ``finally`` (e.g. ``conn.close()``) runs promptly."""
+    n = 0
+    for item in it:
+        if n >= limit:
+            it.close()
+            return
+        yield item
+        n += 1
+
+
 def _pin_hnsw_threads(collection) -> None:
     """Best-effort retrofit: pin ``hnsw:num_threads=1`` on an existing collection.
 
@@ -1669,6 +1787,18 @@ class ChromaCollection(BaseCollection):
                 if result is not None:
                     return result
         return super().count_matching(where)
+
+    def scan(self, *, where=None, include=("metadatas",), limit=None):
+        db_path = self._sql_db_path()
+        eq = _simple_eq_where(where)
+        if db_path is None or eq is _SCAN_COMPLEX_WHERE:
+            return super().scan(where=where, include=include, limit=limit)
+        conn = _open_ro(db_path)
+        if conn is None:
+            return super().scan(where=where, include=include, limit=limit)
+        want_docs = "documents" in tuple(include)
+        stream = _sql_scan(conn, self._collection.name, eq=eq, want_documents=want_docs)
+        return stream if limit is None else _scan_limited(stream, limit)
 
     def lexical_search(
         self,

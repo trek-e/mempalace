@@ -640,17 +640,21 @@ def test_file_already_mined_check_mtime():
 
 
 def test_file_already_mined_scopes_convo_extract_mode():
+    from mempalace.backends.chroma import ChromaCollection
+
     tmpdir = tempfile.mkdtemp()
     try:
         palace_path = os.path.join(tmpdir, "palace")
         os.makedirs(palace_path)
         client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_or_create_collection(
+        raw_col = client.get_or_create_collection(
             "mempalace_drawers", metadata={"hnsw:space": "cosine"}
         )
+        # Wrap in ChromaCollection so scan() is available for prefetch_mined_set
+        col = ChromaCollection(raw_col, palace_path=palace_path)
 
         source_file = os.path.join(tmpdir, "chat.jsonl")
-        col.add(
+        raw_col.add(
             ids=["exchange"],
             documents=["exchange drawer"],
             metadatas=[
@@ -667,7 +671,7 @@ def test_file_already_mined_scopes_convo_extract_mode():
         assert source_file in prefetch_mined_set(col, extract_mode="exchange")
         assert source_file not in prefetch_mined_set(col, extract_mode="general")
 
-        col.add(
+        raw_col.add(
             ids=["general"],
             documents=["general drawer"],
             metadatas=[
@@ -682,7 +686,7 @@ def test_file_already_mined_scopes_convo_extract_mode():
         assert file_already_mined(col, source_file, extract_mode="general") is True
         assert source_file in prefetch_mined_set(col, extract_mode="general")
     finally:
-        del col, client
+        del raw_col, col, client
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
